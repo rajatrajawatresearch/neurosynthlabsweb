@@ -22,6 +22,11 @@ function luminance(hex: string): number {
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const values = useAppStore((s) => s.values);
 
+  // Pull the published config from the server once (no-op if backend absent).
+  useEffect(() => {
+    useAppStore.getState().hydrateFromServer();
+  }, []);
+
   useIsoLayoutEffect(() => {
     const root = document.documentElement;
     const vars = buildRootVars(values);

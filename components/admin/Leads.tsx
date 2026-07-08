@@ -1,25 +1,96 @@
 "use client";
 
-import { useState } from "react";
-import { useAppStore } from "@/lib/store";
+import { useEffect, useState } from "react";
+import { useAppStore, type Lead } from "@/lib/store";
 import { Icon } from "@/components/ui/Icon";
 
 export function Leads() {
-  const leads = useAppStore((s) => s.leads);
-  const markLead = useAppStore((s) => s.markLead);
-  const deleteLead = useAppStore((s) => s.deleteLead);
-  const clearLeads = useAppStore((s) => s.clearLeads);
+  const localLeads = useAppStore((s) => s.leads);
+  const localMark = useAppStore((s) => s.markLead);
+  const localDelete = useAppStore((s) => s.deleteLead);
+  const localClear = useAppStore((s) => s.clearLeads);
+
+  // serverLeads === null => backend unavailable, fall back to local store
+  const [serverLeads, setServerLeads] = useState<Lead[] | null>(null);
+  const [loading, setLoading] = useState(true);
   const [openId, setOpenId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/leads")
+      .then(async (r) => {
+        if (!active) return;
+        if (r.ok) {
+          const d = await r.json();
+          setServerLeads(Array.isArray(d.leads) ? d.leads : []);
+        } else {
+          setServerLeads(null);
+        }
+      })
+      .catch(() => active && setServerLeads(null))
+      .finally(() => active && setLoading(false));
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const serverMode = serverLeads !== null;
+  const leads = serverMode ? (serverLeads as Lead[]) : localLeads;
+
+  async function mark(id: string, read: boolean) {
+    if (serverMode) {
+      setServerLeads((prev) => (prev ? prev.map((l) => (l.id === id ? { ...l, read } : l)) : prev));
+      await fetch("/api/leads", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, read }),
+      }).catch(() => {});
+    } else {
+      localMark(id, read);
+    }
+  }
+
+  async function remove(id: string) {
+    if (serverMode) {
+      setServerLeads((prev) => (prev ? prev.filter((l) => l.id !== id) : prev));
+      await fetch(`/api/leads?id=${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
+    } else {
+      localDelete(id);
+    }
+  }
+
+  async function clearAll() {
+    if (!confirm("Delete all leads?")) return;
+    if (serverMode) {
+      const ids = leads.map((l) => l.id);
+      setServerLeads([]);
+      await Promise.all(
+        ids.map((id) => fetch(`/api/leads?id=${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {})),
+      );
+    } else {
+      localClear();
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="grid place-items-center py-24">
+        <div className="h-7 w-7 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--primary)]" />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-2xl font-bold">Leads</h2>
-          <p className="text-sm text-[var(--fg-muted)]">Contact-form submissions (stored in this browser).</p>
+          <p className="text-sm text-[var(--fg-muted)]">
+            {serverMode ? "Contact-form submissions (stored on the server)." : "Contact-form submissions (stored in this browser)."}
+          </p>
         </div>
         {leads.length > 0 && (
-          <button onClick={() => confirm("Delete all leads?") && clearLeads()} className="btn btn-ghost !py-2 text-sm">
+          <button onClick={clearAll} className="btn btn-ghost !py-2 text-sm">
             <Icon name="Trash2" size={15} /> Clear all
           </button>
         )}
@@ -42,7 +113,7 @@ export function Leads() {
                   className="flex w-full items-center justify-between gap-4 text-left"
                   onClick={() => {
                     setOpenId(open ? null : l.id);
-                    if (!l.read) markLead(l.id, true);
+                    if (!l.read) mark(l.id, true);
                   }}
                 >
                   <div className="flex min-w-0 items-center gap-3">
@@ -71,10 +142,10 @@ export function Leads() {
                       <a href={`mailto:${l.email}`} className="btn btn-primary !py-2 text-sm">
                         <Icon name="Mail" size={15} /> Reply
                       </a>
-                      <button onClick={() => markLead(l.id, !l.read)} className="btn btn-outline !py-2 text-sm">
+                      <button onClick={() => mark(l.id, !l.read)} className="btn btn-outline !py-2 text-sm">
                         <Icon name={l.read ? "EyeOff" : "Eye"} size={15} /> Mark {l.read ? "unread" : "read"}
                       </button>
-                      <button onClick={() => deleteLead(l.id)} className="btn btn-ghost !py-2 text-sm text-[var(--danger)]">
+                      <button onClick={() => remove(l.id)} className="btn btn-ghost !py-2 text-sm text-[var(--danger)]">
                         <Icon name="Trash2" size={15} /> Delete
                       </button>
                     </div>

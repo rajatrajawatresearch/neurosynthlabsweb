@@ -41,6 +41,7 @@ export function AdminApp() {
   const hydrated = useHydrated();
   const settings = useAppStore((s) => s.content.settings);
   const leads = useAppStore((s) => s.leads);
+  const saveToServer = useAppStore((s) => s.saveToServer);
   const unread = leads.filter((l) => !l.read).length;
 
   const [authed, setAuthed] = useState(false);
@@ -48,16 +49,49 @@ export function AdminApp() {
   const [err, setErr] = useState(false);
   const [tab, setTab] = useState("dashboard");
   const [drawer, setDrawer] = useState(false);
+  const [configured, setConfigured] = useState(false);
+  const [checking, setChecking] = useState(true);
+  const [publishState, setPublishState] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
   useEffect(() => {
-    // Restore the session auth flag once on mount (sessionStorage is client-only).
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (sessionStorage.getItem("ns-admin-authed") === "1") setAuthed(true);
+    let active = true;
+    fetch("/api/admin")
+      .then((r) => r.json())
+      .then((d) => {
+        if (!active) return;
+        setConfigured(Boolean(d.configured));
+        if (d.authed) setAuthed(true);
+        else if (!d.configured && sessionStorage.getItem("ns-admin-authed") === "1") setAuthed(true);
+      })
+      .catch(() => {
+        // backend unreachable — fall back to demo passcode mode
+        if (!active) return;
+        setConfigured(false);
+        if (sessionStorage.getItem("ns-admin-authed") === "1") setAuthed(true);
+      })
+      .finally(() => active && setChecking(false));
+    return () => {
+      active = false;
+    };
   }, []);
 
-  function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (entry === settings.adminPasscode) {
+    if (configured) {
+      try {
+        const res = await fetch("/api/admin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: entry }),
+        });
+        if (res.ok) {
+          setAuthed(true);
+          setErr(false);
+        } else setErr(true);
+      } catch {
+        setErr(true);
+      }
+    } else if (entry === settings.adminPasscode) {
       setAuthed(true);
       sessionStorage.setItem("ns-admin-authed", "1");
     } else {
@@ -65,9 +99,23 @@ export function AdminApp() {
     }
   }
 
-  function logout() {
+  async function logout() {
+    if (configured) {
+      try {
+        await fetch("/api/admin", { method: "DELETE" });
+      } catch {
+        /* ignore */
+      }
+    }
     setAuthed(false);
     sessionStorage.removeItem("ns-admin-authed");
+  }
+
+  async function publish() {
+    setPublishState("saving");
+    const ok = await saveToServer();
+    setPublishState(ok ? "saved" : "error");
+    setTimeout(() => setPublishState("idle"), 2600);
   }
 
   function go(id: string) {
@@ -75,7 +123,7 @@ export function AdminApp() {
     setDrawer(false);
   }
 
-  if (!hydrated) {
+  if (!hydrated || checking) {
     return (
       <div className="grid min-h-screen place-items-center">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--primary)]" />
@@ -104,7 +152,9 @@ export function AdminApp() {
             {settings.initials}
           </span>
           <h1 className="text-2xl font-bold">Admin access</h1>
-          <p className="mt-1 text-sm text-[var(--fg-muted)]">Enter the passcode to open the control panel.</p>
+          <p className="mt-1 text-sm text-[var(--fg-muted)]">
+            {configured ? "Enter your admin password to open the control panel." : "Enter the passcode to open the control panel."}
+          </p>
           <input
             type="password"
             autoFocus
@@ -113,10 +163,14 @@ export function AdminApp() {
               setEntry(e.target.value);
               setErr(false);
             }}
-            placeholder="Passcode"
+            placeholder={configured ? "Password" : "Passcode"}
             className="field mt-6 text-center"
           />
-          {err && <p className="mt-2 text-sm text-[var(--danger)]">Wrong passcode. Hint: “{settings.adminPasscode}”.</p>}
+          {err && (
+            <p className="mt-2 text-sm text-[var(--danger)]">
+              {configured ? "Wrong password. Try again." : `Wrong passcode. Hint: “${settings.adminPasscode}”.`}
+            </p>
+          )}
           <button type="submit" className="btn btn-primary mt-4 w-full">
             <Icon name="Lock" size={16} /> Unlock
           </button>
@@ -244,6 +298,28 @@ export function AdminApp() {
               <span className="font-display text-sm font-semibold capitalize">{NAV.find((n) => n.id === tab)?.label}</span>
             </div>
             <div className="flex items-center gap-2">
+              {configured && (
+                <button
+                  onClick={publish}
+                  disabled={publishState === "saving"}
+                  className="btn btn-primary !py-1.5 text-sm disabled:opacity-70"
+                  title="Publish changes so every visitor sees them"
+                >
+                  <Icon
+                    name={publishState === "saved" ? "Check" : publishState === "error" ? "X" : "Upload"}
+                    size={14}
+                  />
+                  <span className="hidden sm:inline">
+                    {publishState === "saving"
+                      ? "Publishing…"
+                      : publishState === "saved"
+                        ? "Published"
+                        : publishState === "error"
+                          ? "Failed"
+                          : "Publish"}
+                  </span>
+                </button>
+              )}
               <Link href="/" target="_blank" className="btn btn-outline !py-1.5 text-sm">
                 <Icon name="ExternalLink" size={14} /> <span className="hidden sm:inline">View site</span>
               </Link>

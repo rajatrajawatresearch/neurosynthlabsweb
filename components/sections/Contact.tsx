@@ -21,10 +21,20 @@ export function Contact() {
   const [message, setMessage] = useState("");
   const [submitted, setSubmitted] = useState(false);
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim() || !email.trim() || !message.trim()) return;
-    addLead({ name, email, company, budget, message });
+    const payload = { name, email, company, budget, message };
+    try {
+      const res = await fetch("/api/leads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error("server");
+    } catch {
+      addLead(payload); // fallback: store locally if the backend isn't reachable
+    }
     setSubmitted(true);
     setName("");
     setEmail("");

@@ -59,6 +59,10 @@ interface AppState {
   deleteLead: (id: string) => void;
   clearLeads: () => void;
 
+  // --- server sync (Vercel Blob backend; no-ops if not configured) ---
+  hydrateFromServer: () => Promise<void>;
+  saveToServer: () => Promise<boolean>;
+
   resetAll: () => void;
 }
 
@@ -74,7 +78,7 @@ const randHex = () => {
 
 export const useAppStore = create<AppState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       values: { ...DEFAULT_VALUES },
       content: structuredClone(DEFAULT_CONTENT),
       activePreset: "bioluminescence",
@@ -171,6 +175,33 @@ export const useAppStore = create<AppState>()(
       deleteLead: (id) => set((s) => ({ leads: s.leads.filter((l) => l.id !== id) })),
 
       clearLeads: () => set({ leads: [] }),
+
+      hydrateFromServer: async () => {
+        try {
+          const res = await fetch("/api/config", { cache: "no-store" });
+          if (!res.ok) return;
+          const data = await res.json();
+          if (data && data.values && data.content) {
+            set({ values: { ...DEFAULT_VALUES, ...data.values }, content: data.content });
+          }
+        } catch {
+          /* offline / not configured — keep local */
+        }
+      },
+
+      saveToServer: async () => {
+        try {
+          const { values, content } = get();
+          const res = await fetch("/api/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ values, content }),
+          });
+          return res.ok;
+        } catch {
+          return false;
+        }
+      },
 
       resetAll: () =>
         set({
